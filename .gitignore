@@ -1,0 +1,31 @@
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Build / cache ---
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+**/build/
+.cache/
+**/tsconfig.tsbuildinfo
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Claude Code ---
+# Keep .claude/ (skills, commands, project settings, CLAUDE.md, memory) tracked
+# so the whole team shares the same tooling and AI collaboration memory is
+# restorable on a new machine (see docs/AI_CEO_WORKING_MODEL.md §6).
+# Only per-user overrides stay ignored — settings.local.json holds personal
+# permission overrides that shouldn't be forced on teammates.
+.claude/settings.local.json

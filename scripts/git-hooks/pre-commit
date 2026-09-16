@@ -1,0 +1,102 @@
+#!/bin/sh
+# [TODO: 專案名稱] pre-commit hook
+#
+# Enable per-clone (one-time):
+#   git config core.hooksPath scripts/git-hooks
+#
+# Runs conditional audits so unrelated commits are unaffected;
+# only relevant file changes trigger the corresponding audits.
+#
+# Bypass in an emergency:  git commit --no-verify
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+# TODO: 如果程式碼在子目錄（例如 app/），改成 "$REPO_ROOT/app"
+APP_DIR="$REPO_ROOT"
+
+# ============================================================
+# Guard 1 — tsc --noEmit on any src/ or lib/ change
+# ============================================================
+if git diff --cached --name-only | grep -qE '\.(ts|tsx)$'; then
+  echo "→ pre-commit: running tsc --noEmit (TS files staged)"
+  cd "$APP_DIR"
+  if ! npx tsc --noEmit 2>&1 | tail -20; then
+    echo ""
+    echo "❌ pre-commit: tsc --noEmit failed — fix TS errors or --no-verify to bypass"
+    exit 1
+  fi
+  cd "$REPO_ROOT"
+fi
+
+# ============================================================
+# Guard 1b — [TODO: 專案特定的靜態檢查]
+# ============================================================
+#
+# 範例（TripTrust 的真實案例，留著當寫法參考）：
+#   pre-commit 曾經加過一條「/search 頁面的 <Link> 一定要帶 prefetch={false}」，
+#   因為 Next.js App Router 的 <Link> 進入視窗會自動預取，而預取會完整渲染
+#   目標頁面 + 打一次資料庫查詢。那個頁面剛好是全站最貴的一頁（無快取），
+#   累積下來是資料庫流量事故三個相乘因素之一，而且用 grep 一查 47 處全部
+#   漏掉這個屬性。
+#
+#   通則：任何「這個屬性/寫法必須存在，漏了不會報錯但會在背後產生
+#   意料外的成本或行為」的規則，都適合寫成一支腳本 + 這裡的 guard，
+#   而不是寫進文件靠人記得。
+#
+# if git diff --cached --name-only | grep -qE '\.tsx$'; then
+#   echo "→ pre-commit: [你的檢查描述]"
+#   cd "$APP_DIR"
+#   if ! node scripts/your-check.mjs; then
+#     echo "❌ pre-commit: [失敗原因 + 怎麼修]"
+#     exit 1
+#   fi
+#   cd "$REPO_ROOT"
+# fi
+
+# ============================================================
+# Guard 2 — issue-health-check when ISSUES.md is staged
+# ============================================================
+if git diff --cached --name-only | grep -q '^ISSUES.md$'; then
+  echo "→ pre-commit: running issue-health-check (ISSUES.md staged)"
+  cd "$APP_DIR"
+  # 只做提醒不擋 commit——歷史累積的 issue 可能有大量既有 drift，
+  # 不該讓一次不相關的 commit 被舊帳擋住。真正要收斂的話，改成比對
+  # 「這次 commit 新增的違規數」vs 基準線，只在變多時才 fail。
+  node scripts/issue-health-check.mjs 2>&1 | tail -12 || true
+  cd "$REPO_ROOT"
+  echo ""
+  echo "ℹ  pre-commit: audit above is informational. New [fixed] entries should include RD 回應 + 驗證 per SUB_AGENT_CHEATSHEET.md."
+fi
+
+# ============================================================
+# Guard 3 — AI 協作記憶 drift 偵測（每次 commit 都跑）
+# ============================================================
+# 為什麼在 pre-commit：Claude Code 的 memory 寫在本機
+# ~/.claude/projects/<slug>/memory/，不會自動進 git。commit 的時刻剛好是
+# 「這段工作結束了」，也是 memory 最可能剛更新過的時候 —— 在這裡提醒最準。
+#
+# 刻意只警告不自動 staging：一個修 bug 的 commit 突然夾帶 memory 檔會讓
+# git history 混亂。由執行 commit 的人當場決定要不要併進這次 commit。
+MEM_SYNC="$REPO_ROOT/scripts/sync-memory.sh"
+if [ -x "$MEM_SYNC" ]; then
+  REPO_MEM="$REPO_ROOT/.claude/memory"
+  SLUG="$(echo "$REPO_ROOT" | sed 's|/|-|g')"
+  LOCAL_MEM="$HOME/.claude/projects/$SLUG/memory"
+
+  if [ -d "$LOCAL_MEM" ] && [ -d "$REPO_MEM" ]; then
+    if ! diff -rq "$REPO_MEM" "$LOCAL_MEM" >/dev/null 2>&1; then
+      DRIFT=$(diff -rq "$REPO_MEM" "$LOCAL_MEM" 2>/dev/null \
+                | sed 's/.*\///; s/ differs//; s/^Only in.*: //' \
+                | tr '\n' ' ')
+      echo ""
+      echo "→ pre-commit: memory drift 偵測"
+      echo "⚠️  本機 memory 跟 repo 不一致："
+      echo "      $DRIFT"
+      echo "   要一起 commit 的話先跑：./scripts/sync-memory.sh backup"
+      echo "   （只是提醒，不擋這次 commit）"
+    fi
+  fi
+fi
+
+exit 0
